@@ -8,7 +8,6 @@ use std::{
     marker::PhantomData,
     net::{SocketAddr, UdpSocket},
     process::{Child, Command, Stdio},
-    thread::sleep,
     time::Duration,
 };
 
@@ -18,8 +17,10 @@ use strum::IntoStaticStr;
 
 type Idk = PhantomData<bool>;
 #[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 struct GameData {
-    shop: Vec<Idk>,
+    #[serde(deserialize_with = "empty_list_or_map")]
+    shop: Option<Shop>,
     discount_percent: u8,
     interest_cap: u64,
     inflation: u64,
@@ -34,36 +35,63 @@ struct GameData {
     handscores: Vec<Idk>,
     bankrupt_at: u8, // 0
     current_round: CurrentRound,
-    hand: Vec<Card>,
+    hand: Vec<PlayingCard>,
     consumables: Vec<Idk>,
     deckback: Vec<Idk>,
     deck: Vec<Idk>,
     dollars: u64,
     round: u64,
     state: GameState,
-    jokers: Vec<Idk>,
+    jokers: Vec<Joker>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+struct Shop {
+    vouchers: Vec<Voucher>,
+    reroll_cost: u64,
+    boosters: Vec<BoosterPack>,
+    cards: Vec<Card>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Voucher {
+    label: String, // TODO: convert to enum
+}
+
+#[derive(Debug, Deserialize)]
+struct BoosterPack {
+    label: String, // TODO: convert to enum
+}
+
+#[derive(Debug, Deserialize)]
+struct Card {
+    label: String, // TODO: convert to enum (with subdivisions for jokers, planet, and tarot cards)
+}
+
+#[derive(Debug, Deserialize)]
 struct Ante {
+    #[serde(deserialize_with = "empty_list_or_map")]
     blinds: Option<Blind>,
 }
-impl<'de> Deserialize<'de> for Ante {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self {
-            blinds: if let Ok(map) = HashMap::<String, Blind>::deserialize(deserializer) {
-                let mut iter = map.into_iter();
-                let (name, blind) = iter.next().unwrap();
-                assert!(&name == "blinds");
-                assert!(iter.next().is_none());
-                Some(blind)
-            } else {
-                None
-            },
-        })
+
+fn empty_list_or_map<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ListOrMap<T> {
+        List([T; 0]),
+        Map(T),
+    }
+    use ListOrMap::*;
+
+    let list_or_map = ListOrMap::<T>::deserialize(deserializer)?;
+
+    match list_or_map {
+        Map(value) => Ok(Some(value)),
+        List(_) => Ok(None),
     }
 }
 
@@ -85,7 +113,7 @@ struct CurrentRound {
 
 // TODO: clean this up a bit
 #[derive(Deserialize, Debug)]
-struct Card {
+struct PlayingCard {
     value: Value,
     suit: Suit,
     label: Label,
@@ -181,12 +209,18 @@ pub enum WaitingFor {
     SkipOrSelectBlind,
     SelectCardsFromHand,
     SelectShopAction,
+    /// Seems to be bugged in the library, state is 999, no information of the choices is given, and neither SelectBoosterCard nor SkipBoosterPack work
     SelectBoosterAction,
     SellJokers,
     RearrangeJokers,
     UseOrSellConsumables,
     RearrangeConsumables,
     RearrangeHand,
+}
+
+#[derive(Deserialize, Debug)]
+struct Joker {
+    label: String, // todo: use an enum
 }
 
 /// 1-based indices
