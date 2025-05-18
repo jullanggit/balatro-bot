@@ -1,5 +1,9 @@
+#![feature(iter_intersperse)]
+
 use std::{
+    collections::HashMap,
     env,
+    io::stdin,
     marker::PhantomData,
     net::{SocketAddr, UdpSocket},
     process::{Child, Command, Stdio},
@@ -7,8 +11,66 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_repr::Deserialize_repr;
+use strum::IntoStaticStr;
+
+/// 1-based indices
+type Indices = Vec<u8>;
+#[derive(Debug, Clone, IntoStaticStr)]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+// Vec<u8>: 1-based indices
+pub enum BotAction {
+    SelectBlind,
+    SkipBlind,
+    PlayHand(Indices),
+    DiscardHand(Indices),
+    EndShop,
+    RerollShop,
+    BuyCard(Indices),
+    BuyVoucher(Indices),
+    BuyBooster(Indices),
+    SelectBoosterCard(Indices),
+    SkipBoosterPack,
+    SellJoker(Indices),
+    UseConsumable(Indices),
+    SellConsumable(Indices),
+    RearrangeJokers,
+    RearrangeConsumables,
+    RearrangeHand,
+    Pass,
+    StartRun,
+}
+impl Serialize for BotAction {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use BotAction::*;
+
+        let name: &'static str = self.into();
+        if let PlayHand(cards)
+        | DiscardHand(cards)
+        | BuyCard(cards)
+        | BuyVoucher(cards)
+        | BuyBooster(cards)
+        | SelectBoosterCard(cards)
+        | SellJoker(cards)
+        | UseConsumable(cards)
+        | SellConsumable(cards) = self
+        {
+            // Format the inner vector as a comma-separated string
+            let joined = cards
+                .iter()
+                .map(|c| c.to_string())
+                .intersperse(String::from(","))
+                .collect::<String>();
+            serializer.serialize_str(&format!("{name}|{joined}"))
+        } else {
+            serializer.serialize_str(name)
+        }
+    }
+}
 
 pub struct Bot {
     socket: UdpSocket,
@@ -33,8 +95,19 @@ impl Bot {
     }
     pub fn run(&mut self) {
         let mut buffer = [0u8; 65536];
+        let mut cli_buffer = String::new();
 
         loop {
+            // cli commands
+            {
+                cli_buffer.clear();
+                stdin().read_line(&mut cli_buffer).unwrap();
+                // if the buffer isnt only a newline
+                if cli_buffer.len() > 1 {
+                    self.send_command(&cli_buffer).unwrap();
+                }
+            }
+
             self.send_command("HELLO").unwrap();
 
             match self.socket.recv_from(&mut buffer) {
@@ -88,9 +161,27 @@ struct GameData {
     jokers: Vec<Idk>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 struct Ante {
-    blinds: Blind,
+    blinds: Option<Blind>,
+}
+impl<'de> Deserialize<'de> for Ante {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(Self {
+            blinds: if let Ok(map) = HashMap::<String, Blind>::deserialize(deserializer) {
+                let mut iter = map.into_iter();
+                let (name, blind) = iter.next().unwrap();
+                assert!(&name == "blinds");
+                assert!(iter.next().is_none());
+                Some(blind)
+            } else {
+                None
+            },
+        })
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -112,7 +203,6 @@ struct CurrentRound {
 // TODO: clean this up a bit
 #[derive(Deserialize, Debug)]
 struct Card {
-    #[serde(deserialize_with = "from_str")]
     value: Value,
     suit: Suit,
     label: Label,
@@ -134,31 +224,33 @@ enum Value {
     Queen,
     King,
 }
-fn from_str<'de, D>(deserializer: D) -> Result<Value, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use Value::*;
-    use serde::de::Error;
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use Value::*;
+        use serde::de::Error;
 
-    let s = String::deserialize(deserializer)?;
+        let s = String::deserialize(deserializer)?;
 
-    Ok(match s.as_str() {
-        "Ace" => Ace,
-        "2" => Two,
-        "3" => Three,
-        "4" => Four,
-        "5" => Five,
-        "6" => Six,
-        "7" => Seven,
-        "8" => Eight,
-        "9" => Nine,
-        "10" => Ten,
-        "Jack" => Jack,
-        "Queen" => Queen,
-        "King" => King,
-        other => return Err(Error::custom(format!("Invalid value: {other}"))),
-    })
+        Ok(match s.as_str() {
+            "Ace" => Ace,
+            "2" => Two,
+            "3" => Three,
+            "4" => Four,
+            "5" => Five,
+            "6" => Six,
+            "7" => Seven,
+            "8" => Eight,
+            "9" => Nine,
+            "10" => Ten,
+            "Jack" => Jack,
+            "Queen" => Queen,
+            "King" => King,
+            other => return Err(Error::custom(format!("Invalid value: {other}"))),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,8 +320,6 @@ fn main() {
     };
 
     bot.start_balatro();
-
-    sleep(Duration::from_secs(5));
 
     bot.run();
 }
