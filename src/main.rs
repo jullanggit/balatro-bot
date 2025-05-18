@@ -1,8 +1,9 @@
 #![feature(iter_intersperse)]
 
+use serde::{Deserialize, Deserializer};
+use serde_repr::Deserialize_repr;
 use std::{
     borrow::Cow,
-    collections::HashMap,
     env,
     io::stdin,
     marker::PhantomData,
@@ -10,9 +11,6 @@ use std::{
     process::{Child, Command, Stdio},
     time::Duration,
 };
-
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_repr::Deserialize_repr;
 use strum::IntoStaticStr;
 
 type Idk = PhantomData<bool>;
