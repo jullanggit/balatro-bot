@@ -283,17 +283,18 @@ pub struct Bot {
     addr: SocketAddr,
 }
 impl Bot {
-    fn start_balatro(&mut self) {
+    fn start_balatro(&mut self, io: bool) {
         let home = env::var("HOME").unwrap();
-        self.balatro_instance = Some(
-            Command::new(format!(
-                "{home}/.games/Balatro windows 2/Balatro/run_lovely_linux.sh"
-            ))
-            .arg(self.addr.port().to_string())
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("Failed to start Balatro"),
-        );
+        let mut command = Command::new(format!(
+            "{home}/.games/Balatro windows 2/Balatro/run_lovely_linux.sh"
+        ));
+        command.arg(self.addr.port().to_string());
+
+        if io {
+            command.stdout(Stdio::null());
+        }
+
+        self.balatro_instance = Some(command.spawn().expect("Failed to start Balatro"));
     }
     fn send_command(&self, command: &str) {
         self.socket.send_to(command.as_bytes(), self.addr).unwrap();
@@ -369,7 +370,7 @@ fn main() {
         addr,
     };
 
-    bot.start_balatro();
+    bot.start_balatro(true);
 
     bot.run();
 }
