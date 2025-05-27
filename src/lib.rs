@@ -10,16 +10,21 @@ use std::{
 };
 
 use mlua::{DeserializeOptions, Lua, LuaSerdeExt, Table, Value};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_repr::Deserialize_repr;
 use strum::VariantArray;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash, VariantArray)]
 enum CardSuit {
     Diamonds,
     Spades,
     Clubs,
     Hearts,
+}
+impl AsIndex for CardSuit {
+    fn as_index(&self) -> u8 {
+        *self as u8
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash, VariantArray)]
@@ -107,7 +112,6 @@ struct Game {
     bankrupt_at: u64,
     banned_keys: EmptyTable,
     base_reroll_cost: u64,
-    // [(suits, total)]
     #[serde(deserialize_with = "enum_array")]
     cards_played: [CardPlayed; variant_count::<CardValue>()],
     chips: u64,
@@ -155,10 +159,17 @@ struct Game {
     used_jokers: HashMap<String, bool>,
     won: bool,
 }
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(transparent)]
+struct Played(bool);
+impl Indexer for Played {
+    type Indexer = CardSuit;
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
 struct CardPlayed {
-    #[serde(default)] // lets hope this errors when it should
-    suits: [bool; variant_count::<CardSuit>()],
+    #[serde(deserialize_with = "enum_array_default")]
+    suits: [Played; variant_count::<CardSuit>()],
     total: u64,
 }
 impl Indexer for CardPlayed {
@@ -229,7 +240,7 @@ struct RoundBonus {
     next_hands: u16,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 struct HandData {
     chips: u64,
     l_chips: u64,
@@ -247,22 +258,49 @@ trait Indexer {
 impl Indexer for HandData {
     type Indexer = Hand;
 }
+
 fn enum_array<'de, D, T>(
     deserializer: D,
 ) -> Result<[T; mem::variant_count::<T::Indexer>()], D::Error>
 where
     D: Deserializer<'de>,
-    T: Deserialize<'de> + Clone + Indexer + Debug,
+    T: Deserialize<'de> + Clone + Indexer + Debug + Default,
     T::Indexer: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
 {
-    let map: HashMap<T::Indexer, T> = HashMap::deserialize(deserializer)?;
-    let mut vec_with_indexer: Vec<(T::Indexer, T)> = map.into_iter().collect();
-    vec_with_indexer.sort_unstable_by_key(|(indexer, _)| indexer.as_index());
-    let vec: Vec<_> = vec_with_indexer
-        .into_iter()
-        .map(|(_indexer, value)| value)
-        .collect();
-    Ok(vec.try_into().unwrap())
+    enum_array_inner(deserializer, false)
+}
+
+/// Uses Default::default() for nonexistent variants
+fn enum_array_default<'de, D, T>(
+    deserializer: D,
+) -> Result<[T; mem::variant_count::<T::Indexer>()], D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Clone + Indexer + Debug + Default,
+    T::Indexer: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
+{
+    enum_array_inner(deserializer, true)
+}
+
+/// Parses into an array indexed by Indexer discriminant.
+fn enum_array_inner<'de, D, T>(
+    deserializer: D,
+    default: bool,
+) -> Result<[T; mem::variant_count::<T::Indexer>()], D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Clone + Indexer + Debug + Default,
+    T::Indexer: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
+{
+    let unwrap_fn = if default {
+        Option::unwrap_or_default
+    } else {
+        Option::unwrap
+    };
+    let temp: HashMap<T::Indexer, T> = HashMap::deserialize(deserializer)?;
+    let mut variants = array::from_fn(|i| T::Indexer::VARIANTS[i].clone());
+    variants.sort_unstable_by_key(AsIndex::as_index);
+    Ok(variants.map(|variant| unwrap_fn(temp.get(&variant).cloned())))
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,6 +331,7 @@ struct CurrentRound {
     used_packs: EmptyTable,
 }
 
+type HandLevel = String; // TODO: actually do this
 #[derive(Debug, Deserialize)]
 struct CurrentHand {
     chip_total: u64,
@@ -302,8 +341,6 @@ struct CurrentHand {
     mult: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct HandLevel {}
 #[derive(Debug, Deserialize, VariantArray, Clone, Copy, Hash, PartialEq, Eq)]
 #[repr(u8)]
 enum Hand {
