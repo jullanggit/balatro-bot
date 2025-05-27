@@ -1,7 +1,7 @@
 #![feature(generic_const_exprs)]
 #![feature(variant_count)]
 
-use std::{array, collections::HashMap, hash::Hash, mem};
+use std::{array, collections::HashMap, fmt::Debug, fs, hash::Hash, mem};
 
 use mlua::{DeserializeOptions, Lua, LuaSerdeExt, Table, Value};
 use serde::{Deserialize, Deserializer};
@@ -197,7 +197,7 @@ struct BlindStates {
 }
 #[derive(Debug, Deserialize)]
 enum BlindState {
-    UpComing,
+    Upcoming,
     Select,
 }
 
@@ -230,13 +230,13 @@ fn enum_array<'de, D, T>(
 ) -> Result<[T; mem::variant_count::<T::INDEXER>()], D::Error>
 where
     D: Deserializer<'de>,
-    T: Deserialize<'de> + Clone + Indexer,
-    T::INDEXER: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone,
+    T: Deserialize<'de> + Clone + Indexer + Debug,
+    T::INDEXER: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
 {
     let temp: HashMap<T::INDEXER, T> = HashMap::deserialize(deserializer)?;
     let mut variants = array::from_fn(|i| T::INDEXER::VARIANTS[i].clone());
     variants.sort_unstable_by_key(AsIndex::as_index);
-    Ok(variants.map(|variant| temp.get(&variant).cloned().unwrap()))
+    Ok(variants.map(|variant| temp.get(&variant).unwrap().clone()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,7 +325,6 @@ fn print_game(lua: &Lua) -> mlua::Result<Table> {
             .deny_unsupported_types(false)
             .deny_recursive_tables(false);
         let r: mlua::Result<State> = lua.from_value_with(g, options);
-        // let game: Table = g.get("GAME")?;
         dbg!(r);
         Ok(())
     })?;
