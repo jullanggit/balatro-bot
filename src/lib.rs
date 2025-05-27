@@ -1,10 +1,18 @@
 #![feature(generic_const_exprs)]
 #![feature(variant_count)]
 
-use std::{array, collections::HashMap, fmt::Debug, fs, hash::Hash, mem};
+use std::{
+    array,
+    collections::HashMap,
+    fmt::{Debug, format},
+    fs,
+    hash::Hash,
+    mem::{self, variant_count},
+    time::Instant,
+};
 
 use mlua::{DeserializeOptions, Lua, LuaSerdeExt, Table, Value};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_repr::Deserialize_repr;
 use strum::VariantArray;
 
@@ -16,7 +24,8 @@ enum CardSuit {
     Hearts,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash, VariantArray)]
+#[repr(u8)]
 enum CardValue {
     Ace,
     #[serde(rename = "2")]
@@ -40,6 +49,11 @@ enum CardValue {
     Jack,
     Queen,
     King,
+}
+impl AsIndex for CardValue {
+    fn as_index(&self) -> u8 {
+        *self as u8
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,29 +100,30 @@ enum Stage {
     Sandbox,
 }
 
-type EmptyBraces = [(); 0];
+type EmptyTable = [(); 0];
 
 #[derive(Debug, Deserialize)]
 #[expect(non_snake_case)]
 struct Game {
     STOP_USE: i32,
     bankrupt_at: u64,
-    banned_keys: EmptyBraces,
+    banned_keys: EmptyTable,
     base_reroll_cost: u64,
     // [(suits, total)]
-    cards_played: Vec<([bool; 4], u32)>, // sorted after CardValue & CardColor discriminant
+    #[serde(deserialize_with = "enum_array")]
+    cards_played: [CardPlayed; variant_count::<CardValue>()],
     chips: u64,
     common_mod: i32,
     consumeable_buffer: i32,
-    consumeable_usage: EmptyBraces,
+    consumeable_usage: EmptyTable,
     current_round: CurrentRound,
-    disabled_ranks: EmptyBraces,
-    disabled_suits: EmptyBraces,
+    disabled_ranks: EmptyTable,
+    disabled_suits: EmptyTable,
     discount_percent: u8,
     dollars: u64,
     ecto_minus: u8,
     edition_rate: u8,
-    hand_usage: EmptyBraces,
+    hand_usage: EmptyTable,
     #[serde(deserialize_with = "enum_array")]
     hands: [HandData; 13], // [; num hands]
     hands_played: u32,
@@ -117,15 +132,15 @@ struct Game {
     interest_cap: u32,
     joker_buffer: u32,
     joker_rate: u32,
-    joker_usage: EmptyBraces,
+    joker_usage: EmptyTable,
     legendary_mod: u32,
     max_jokers: u32,
-    modifiers: EmptyBraces,
+    modifiers: EmptyTable,
     pack_size: u32,
     perishable_rounds: u32,
     planet_rate: u32,
     playing_card_rate: u32,
-    pool_flags: EmptyBraces,
+    pool_flags: EmptyTable,
     round: u16,
     round_bonus: RoundBonus,
     round_resets: RoundResets,
@@ -136,11 +151,20 @@ struct Game {
     stake: u16,
     tarot_rate: u8,
     tag_tally: i32,
-    tags: EmptyBraces,
+    tags: EmptyTable,
     unused_discards: u16,
-    used_vouchers: EmptyBraces,
+    used_vouchers: EmptyTable,
     used_jokers: HashMap<String, bool>,
     won: bool,
+}
+#[derive(Debug, Deserialize, Clone)]
+struct CardPlayed {
+    #[serde(default)] // lets hope this errors when it should
+    suits: [bool; variant_count::<CardSuit>()],
+    total: u64,
+}
+impl Indexer for CardPlayed {
+    type Indexer = CardValue;
 }
 #[derive(Debug, Deserialize)]
 struct Shop {
@@ -220,21 +244,21 @@ struct HandData {
     s_mult: u32,
 }
 trait Indexer {
-    type INDEXER;
+    type Indexer;
 }
 impl Indexer for HandData {
-    type INDEXER = Hand;
+    type Indexer = Hand;
 }
 fn enum_array<'de, D, T>(
     deserializer: D,
-) -> Result<[T; mem::variant_count::<T::INDEXER>()], D::Error>
+) -> Result<[T; mem::variant_count::<T::Indexer>()], D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de> + Clone + Indexer + Debug,
-    T::INDEXER: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
+    T::Indexer: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
 {
-    let temp: HashMap<T::INDEXER, T> = HashMap::deserialize(deserializer)?;
-    let mut variants = array::from_fn(|i| T::INDEXER::VARIANTS[i].clone());
+    let temp: HashMap<T::Indexer, T> = HashMap::deserialize(deserializer)?;
+    let mut variants = array::from_fn(|i| T::Indexer::VARIANTS[i].clone());
     variants.sort_unstable_by_key(AsIndex::as_index);
     Ok(variants.map(|variant| temp.get(&variant).unwrap().clone()))
 }
@@ -320,11 +344,22 @@ fn print_game(lua: &Lua) -> mlua::Result<Table> {
 
     let print_game = lua.create_function(|lua, ()| {
         let globals = lua.globals();
-        let g: Value = globals.get("G")?;
+        let g: Table = globals.get("G")?;
+        let game: Value = g.get("GAME")?;
+        // serialize for later use
+        {
+            let serializable = game
+                .to_serializable() // my god why is this #[doc(hidden)]
+                .sort_keys(true)
+                .deny_recursive_tables(false)
+                .deny_unsupported_types(false);
+            let json = serde_json_path_to_error::to_string_pretty(&serializable).unwrap();
+            fs::write("json.json", json).unwrap();
+        }
         let options = DeserializeOptions::new()
-            .deny_unsupported_types(false)
-            .deny_recursive_tables(false);
-        let r: mlua::Result<State> = lua.from_value_with(g, options);
+            .deny_unsupported_types(true)
+            .deny_recursive_tables(true);
+        let r: mlua::Result<Game> = lua.from_value_with(game, options); // TODO: deserialize G into State
         dbg!(r);
         Ok(())
     })?;

@@ -322,7 +322,7 @@ impl Bot {
             match self.socket.recv_from(&mut buffer) {
                 Ok((size, _)) => {
                     let msg = String::from_utf8_lossy(&buffer[..size]);
-                    match serde_json_path_to_error::from_str::<GameData>(dbg!(&msg)) {
+                    match serde_json_path_to_error::from_str::<GameData>(&msg) {
                         Ok(game_data) => {
                             if !cli_command {
                                 self.temporary_handling(dbg!(game_data))
