@@ -5,8 +5,22 @@ name = "balatro-bot"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "print_game"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "balatro-bot"
+path = "src/main.rs"
+
 [dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json_path_to_error = "0.1.4"
 serde_repr = "0.1.20"
 strum = { version = "0.27.1", features = ["derive"] }
+mlua = { version = "0.10.3", default-features = false, features = [
+  "macros",
+  "luajit",
+  "module",
+  "serialize",
+] }
