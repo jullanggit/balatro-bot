@@ -4,11 +4,9 @@
 use std::{
     array,
     collections::HashMap,
-    fmt::{Debug, format},
-    fs,
+    fmt::Debug,
     hash::Hash,
     mem::{self, variant_count},
-    time::Instant,
 };
 
 use mlua::{DeserializeOptions, Lua, LuaSerdeExt, Table, Value};
@@ -125,7 +123,7 @@ struct Game {
     edition_rate: u8,
     hand_usage: EmptyTable,
     #[serde(deserialize_with = "enum_array")]
-    hands: [HandData; 13], // [; num hands]
+    hands: [HandData; variant_count::<Hand>()],
     hands_played: u32,
     inflation: i32,
     interest_amount: u32,
@@ -257,10 +255,14 @@ where
     T: Deserialize<'de> + Clone + Indexer + Debug,
     T::Indexer: Deserialize<'de> + AsIndex + Hash + Eq + VariantArray + Clone + Debug,
 {
-    let temp: HashMap<T::Indexer, T> = HashMap::deserialize(deserializer)?;
-    let mut variants = array::from_fn(|i| T::Indexer::VARIANTS[i].clone());
-    variants.sort_unstable_by_key(AsIndex::as_index);
-    Ok(variants.map(|variant| temp.get(&variant).unwrap().clone()))
+    let map: HashMap<T::Indexer, T> = HashMap::deserialize(deserializer)?;
+    let mut vec_with_indexer: Vec<(T::Indexer, T)> = map.into_iter().collect();
+    vec_with_indexer.sort_unstable_by_key(|(indexer, _)| indexer.as_index());
+    let vec: Vec<_> = vec_with_indexer
+        .into_iter()
+        .map(|(_indexer, value)| value)
+        .collect();
+    Ok(vec.try_into().unwrap())
 }
 
 #[derive(Debug, Deserialize)]
@@ -288,7 +290,7 @@ struct CurrentRound {
     reroll_cost: u64,
     reroll_cost_increase: u64,
     round_dollars: u64,
-    used_packs: [(); 1],
+    used_packs: EmptyTable,
 }
 
 #[derive(Debug, Deserialize)]
@@ -320,8 +322,9 @@ enum Hand {
     FourOfAKind,
     #[serde(rename = "Straight Flush")]
     StraightFlush,
-    #[serde(rename = "Royal Flush")]
-    RoyalFlush,
+    // For some reason not present in G.GAME.hands
+    // #[serde(rename = "Royal Flush")]
+    // RoyalFlush,
     #[serde(rename = "Five of a Kind")]
     FiveOfAKind,
     #[serde(rename = "Flush House")]
@@ -346,20 +349,10 @@ fn print_game(lua: &Lua) -> mlua::Result<Table> {
         let globals = lua.globals();
         let g: Table = globals.get("G")?;
         let game: Value = g.get("GAME")?;
-        // serialize for later use
-        {
-            let serializable = game
-                .to_serializable() // my god why is this #[doc(hidden)]
-                .sort_keys(true)
-                .deny_recursive_tables(false)
-                .deny_unsupported_types(false);
-            let json = serde_json_path_to_error::to_string_pretty(&serializable).unwrap();
-            fs::write("json.json", json).unwrap();
-        }
         let options = DeserializeOptions::new()
-            .deny_unsupported_types(true)
-            .deny_recursive_tables(true);
-        let r: mlua::Result<Game> = lua.from_value_with(game, options); // TODO: deserialize G into State
+            .deny_unsupported_types(false)
+            .deny_recursive_tables(false);
+        let r: mlua::Result<Game> = lua.from_value_with(dbg!(game), options); // TODO: deserialize G into State
         dbg!(r);
         Ok(())
     })?;
