@@ -112,12 +112,13 @@ struct Game {
     bankrupt_at: u64,
     banned_keys: EmptyTable,
     base_reroll_cost: u64,
+    bosses_used: BossesUsed,
     #[serde(deserialize_with = "enum_array")]
     cards_played: [CardPlayed; variant_count::<CardValue>()],
     chips: u64,
-    common_mod: i32,
     consumeable_buffer: i32,
-    consumeable_usage: EmptyTable,
+    // TODO: consumeable_usage: EmptyTable,
+    consumeable_usage_total: ConsumeableUsageTotal,
     current_round: CurrentRound,
     disabled_ranks: EmptyTable,
     disabled_suits: EmptyTable,
@@ -125,19 +126,23 @@ struct Game {
     dollars: u64,
     ecto_minus: u8,
     edition_rate: u8,
-    hand_usage: EmptyTable,
+    first_shop_buffoon: bool,
+    #[serde(deserialize_with = "enum_array")]
+    hand_usage: [HandUsage; variant_count::<Hand>()],
     #[serde(deserialize_with = "enum_array")]
     hands: [HandData; variant_count::<Hand>()],
-    hands_played: u32,
+    hands_played: u16,
     inflation: i32,
     interest_amount: u32,
     interest_cap: u32,
     joker_buffer: u32,
     joker_rate: u32,
     joker_usage: EmptyTable,
+    last_hand_played: Hand,
     legendary_mod: u32,
     max_jokers: u32,
     modifiers: EmptyTable,
+    orbital_choices: OrbitalChoices,
     pack_size: u32,
     perishable_rounds: u32,
     planet_rate: u32,
@@ -156,9 +161,42 @@ struct Game {
     tags: EmptyTable,
     unused_discards: u16,
     used_vouchers: EmptyTable,
-    used_jokers: HashMap<String, bool>,
+    used_jokers: HashMap<String, bool>, // TODO: add joker enum
     won: bool,
 }
+
+#[derive(Debug, Deserialize)]
+struct BossesUsed {
+    bl_arm: u8,
+    bl_club: u8,
+    bl_eye: u8,
+    bl_final_acorn: u8,
+    bl_final_bell: u8,
+    bl_final_heart: u8,
+    bl_final_leaf: u8,
+    bl_final_vessel: u8,
+    bl_fish: u8,
+    bl_flint: u8,
+    bl_goad: u8,
+    bl_head: u8,
+    bl_hook: u8,
+    bl_house: u8,
+    bl_manacle: u8,
+    bl_mark: u8,
+    bl_mouth: u8,
+    bl_needle: u8,
+    bl_ox: u8,
+    bl_pillar: u8,
+    bl_plant: u8,
+    bl_psychic: u8,
+    bl_serpent: u8,
+    bl_tooth: u8,
+    bl_wall: u8,
+    bl_water: u8,
+    bl_wheel: u8,
+    bl_window: u8,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(transparent)]
 struct Played(bool);
@@ -174,6 +212,15 @@ struct CardPlayed {
 }
 impl Indexer for CardPlayed {
     type Indexer = CardValue;
+}
+
+#[derive(Debug, Deserialize)]
+struct ConsumeableUsageTotal {
+    all: u16,
+    planet: u16,
+    spectral: u16,
+    tarot: u16,
+    tarot_planet: u16,
 }
 #[derive(Debug, Deserialize)]
 struct Shop {
@@ -241,6 +288,14 @@ struct RoundBonus {
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
+struct HandUsage {
+    count: u16,
+}
+impl Indexer for HandUsage {
+    type Indexer = Hand;
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
 struct HandData {
     chips: u64,
     l_chips: u64,
@@ -304,17 +359,31 @@ where
 }
 
 #[derive(Debug, Deserialize)]
+struct OrbitalChoices {
+    Small: Hand,
+    Big: Hand,
+    Boss: Hand,
+}
+
+#[derive(Debug, Deserialize)]
 struct IdolCard {
     rank: CardValue,
     suit: CardSuit,
 }
 
 #[derive(Debug, Deserialize)]
+struct MailCard {
+    rank: CardValue,
+}
+
+#[derive(Debug, Deserialize)]
 struct CurrentRound {
-    ancient_card: CardSuit,
+    ancient_card: OnlyCardSuit,
     cards_flipped: u8,
-    castle_card: CardSuit,
-    current_hand: CurrentHand,
+    castle_card: OnlyCardSuit,
+    // should only error if current hand isnt initialised
+    #[serde(deserialize_with = "none_on_error")]
+    current_hand: Option<CurrentHand>,
     discards_left: u8,
     discards_used: u8,
     dollars: u64,
@@ -323,12 +392,26 @@ struct CurrentRound {
     hands_played: u8,
     idol_card: IdolCard,
     jokers_purchased: u8,
-    mail_card: CardValue,
+    mail_card: MailCard,
     most_played_poker_hand: Hand,
     reroll_cost: u64,
     reroll_cost_increase: u64,
     round_dollars: u64,
     used_packs: EmptyTable,
+}
+
+/// Returns none on deserialization error
+fn none_on_error<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(T::deserialize(deserializer).ok())
+}
+
+#[derive(Debug, Deserialize)]
+struct OnlyCardSuit {
+    suit: CardSuit,
 }
 
 type HandLevel = String; // TODO: actually do this
