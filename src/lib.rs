@@ -118,7 +118,7 @@ struct Game {
     chips: u64,
     consumeable_buffer: i32,
     // TODO: consumeable_usage: EmptyTable,
-    consumeable_usage_total: ConsumeableUsageTotal,
+    consumeable_usage_total: Option<ConsumeableUsageTotal>,
     current_round: CurrentRound,
     disabled_ranks: EmptyTable,
     disabled_suits: EmptyTable,
@@ -127,7 +127,7 @@ struct Game {
     ecto_minus: u8,
     edition_rate: u8,
     first_shop_buffoon: bool,
-    #[serde(deserialize_with = "enum_array")]
+    #[serde(deserialize_with = "enum_array_default")]
     hand_usage: [HandUsage; variant_count::<Hand>()],
     #[serde(deserialize_with = "enum_array")]
     hands: [HandData; variant_count::<Hand>()],
